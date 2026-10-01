@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+/* Identidade visual própria do Próximo: verde-azulado com tons neutros. */
+@theme {
+  --color-brand-50: #effcf9;
+  --color-brand-100: #c9f5ea;
+  --color-brand-200: #94e9d6;
+  --color-brand-500: #14a38b;
+  --color-brand-600: #0e8573;
+  --color-brand-700: #0f6a5e;
+  --color-brand-900: #0f3f39;
+  --font-sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 antialiased;
+}

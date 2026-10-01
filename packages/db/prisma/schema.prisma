@@ -1,0 +1,581 @@
+// Schema do banco do Próximo.
+//
+// Convenções:
+// - Modelos em PascalCase e campos em camelCase no código; tabelas e colunas em snake_case no banco.
+// - Termos neutros: business, professional, service, appointment. Nunca "barber".
+// - Toda tabela de tenant tem business_id. Relações obrigatórias entre tabelas de tenant usam
+//   chave estrangeira composta (business_id, id), então o banco impede cruzar dados entre negócios.
+// - Datas em UTC (timestamptz). Horários de funcionamento em minutos no fuso do negócio.
+// - Regras que o Prisma não expressa ficam em SQL nas migrations: exclusion constraint contra
+//   agendamento sobreposto e checks de consistência.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Segment {
+  barbershop
+  salon
+  aesthetics
+  tattoo
+  pet_shop
+  clinic
+  other
+
+  @@map("segment")
+}
+
+enum SchedulingProviderKind {
+  internal
+  appbarber
+
+  @@map("scheduling_provider_kind")
+}
+
+enum BusinessStatus {
+  active
+  suspended
+
+  @@map("business_status")
+}
+
+enum MembershipRole {
+  owner
+  manager
+  staff
+
+  @@map("membership_role")
+}
+
+enum ChannelType {
+  whatsapp_cloud
+  simulator
+
+  @@map("channel_type")
+}
+
+enum ChannelStatus {
+  active
+  disabled
+
+  @@map("channel_status")
+}
+
+enum AppointmentStatus {
+  scheduled
+  confirmed
+  completed
+  cancelled
+  no_show
+
+  @@map("appointment_status")
+}
+
+enum AppointmentSource {
+  agent
+  panel
+
+  @@map("appointment_source")
+}
+
+enum ConversationMode {
+  agent
+  human
+
+  @@map("conversation_mode")
+}
+
+enum MessageDirection {
+  inbound
+  outbound
+
+  @@map("message_direction")
+}
+
+enum MessageAuthor {
+  customer
+  agent
+  staff
+  system
+
+  @@map("message_author")
+}
+
+enum MessageKind {
+  text
+  template
+  button
+  interactive
+  audio
+  image
+  video
+  document
+  sticker
+  location
+  reaction
+  other
+
+  @@map("message_kind")
+}
+
+enum DeliveryStatus {
+  pending
+  sent
+  delivered
+  read
+  failed
+
+  @@map("delivery_status")
+}
+
+enum AgentSessionStatus {
+  active
+  closed
+
+  @@map("agent_session_status")
+}
+
+enum NotificationKind {
+  reminder_24h
+  reminder_2h
+
+  @@map("notification_kind")
+}
+
+enum NotificationStatus {
+  pending
+  sent
+  failed
+  skipped
+
+  @@map("notification_status")
+}
+
+enum ActorType {
+  user
+  agent
+  system
+  customer
+
+  @@map("actor_type")
+}
+
+/// Um negócio atendido pelo Próximo. É o tenant.
+model Business {
+  id                  String                 @id @default(uuid(7)) @db.Uuid
+  name                String
+  slug                String                 @unique
+  segment             Segment
+  timezone            String                 @default("America/Sao_Paulo")
+  status              BusinessStatus         @default(active)
+  schedulingProvider  SchedulingProviderKind @default(internal) @map("scheduling_provider")
+  /// Credenciais do provider externo, cifradas com ENCRYPTION_KEY.
+  providerConfig      String?                @map("provider_config")
+  /// Antecedência mínima para marcar, em minutos.
+  minLeadMinutes      Int                    @default(60) @map("min_lead_minutes")
+  /// Até quantos dias à frente o cliente pode marcar.
+  maxAdvanceDays      Int                    @default(30) @map("max_advance_days")
+  /// Intervalo entre os horários oferecidos, em minutos.
+  slotIntervalMinutes Int                    @default(30) @map("slot_interval_minutes")
+  /// Nome com que o assistente se apresenta. Vazio usa "assistente virtual".
+  agentName           String?                @map("agent_name")
+  /// Orientações extras do negócio para o agente.
+  agentInstructions   String?                @map("agent_instructions")
+  address             String?
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt           DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships          Membership[]
+  channels             Channel[]
+  professionals        Professional[]
+  services             Service[]
+  professionalServices ProfessionalService[]
+  workingHours         WorkingHours[]
+  scheduleBlocks       ScheduleBlock[]
+  customers            Customer[]
+  appointments         Appointment[]
+  conversations        Conversation[]
+  messages             Message[]
+  agentSessions        AgentSession[]
+  agentRuns            AgentRun[]
+  notifications        Notification[]
+  auditLogs            AuditLog[]
+
+  @@map("businesses")
+}
+
+/// Pessoa que acessa o painel. Pode participar de vários negócios.
+model User {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false) @map("email_verified")
+  image         String?
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  memberships           Membership[]
+  professionals         Professional[]
+  assignedConversations Conversation[]
+
+  @@map("users")
+}
+
+model Membership {
+  id         String         @id @default(uuid(7)) @db.Uuid
+  businessId String         @map("business_id") @db.Uuid
+  userId     String         @map("user_id") @db.Uuid
+  role       MembershipRole
+  createdAt  DateTime       @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@map("memberships")
+}
+
+/// Canal de mensagens do negócio, como um número de WhatsApp.
+model Channel {
+  id           String        @id @default(uuid(7)) @db.Uuid
+  businessId   String        @map("business_id") @db.Uuid
+  type         ChannelType
+  /// phone_number_id da Meta no WhatsApp. Identificador livre no simulador.
+  externalId   String        @map("external_id")
+  displayPhone String?       @map("display_phone")
+  wabaId       String?       @map("waba_id")
+  /// Credenciais cifradas com ENCRYPTION_KEY, como o access token da Meta.
+  credentials  String?
+  /// Número usado ao mesmo tempo no app WhatsApp Business e na Cloud API.
+  coexistence  Boolean       @default(false)
+  status       ChannelStatus @default(active)
+  createdAt    DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt    DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  conversations Conversation[]
+
+  @@unique([type, externalId])
+  @@unique([businessId, id])
+  @@map("channels")
+}
+
+model Professional {
+  id         String   @id @default(uuid(7)) @db.Uuid
+  businessId String   @map("business_id") @db.Uuid
+  name       String
+  active     Boolean  @default(true)
+  /// Cor na agenda do painel.
+  color      String?
+  sortOrder  Int      @default(0) @map("sort_order")
+  /// Login do profissional no painel, se ele tiver um.
+  userId     String?  @map("user_id") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business       Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user           User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  services       ProfessionalService[]
+  workingHours   WorkingHours[]
+  scheduleBlocks ScheduleBlock[]
+  appointments   Appointment[]
+
+  @@unique([businessId, id])
+  @@index([businessId, active])
+  @@map("professionals")
+}
+
+model Service {
+  id              String   @id @default(uuid(7)) @db.Uuid
+  businessId      String   @map("business_id") @db.Uuid
+  name            String
+  description     String?
+  durationMinutes Int      @map("duration_minutes")
+  /// Folga depois do atendimento, como limpeza. Conta só para o próximo horário.
+  bufferMinutes   Int      @default(0) @map("buffer_minutes")
+  priceCents      Int      @map("price_cents")
+  active          Boolean  @default(true)
+  sortOrder       Int      @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business      Business              @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  professionals ProfessionalService[]
+  appointments  Appointment[]
+
+  @@unique([businessId, id])
+  @@index([businessId, active])
+  @@map("services")
+}
+
+/// Quem faz qual serviço. Serviço sem nenhuma linha aqui vale para todos os profissionais.
+model ProfessionalService {
+  businessId      String @map("business_id") @db.Uuid
+  professionalId  String @map("professional_id") @db.Uuid
+  serviceId       String @map("service_id") @db.Uuid
+  /// Duração própria deste profissional. Vazio usa a do serviço.
+  durationMinutes Int?   @map("duration_minutes")
+  /// Preço próprio deste profissional. Vazio usa o do serviço.
+  priceCents      Int?   @map("price_cents")
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  professional Professional @relation(fields: [businessId, professionalId], references: [businessId, id], onDelete: Cascade)
+  service      Service      @relation(fields: [businessId, serviceId], references: [businessId, id], onDelete: Cascade)
+
+  @@id([professionalId, serviceId])
+  @@index([businessId, serviceId])
+  @@map("professional_services")
+}
+
+/// Horário semanal. Sem profissional, é o funcionamento do negócio.
+/// Um profissional com linhas próprias usa só as dele. Sem linhas, herda as do negócio.
+model WorkingHours {
+  id             String  @id @default(uuid(7)) @db.Uuid
+  businessId     String  @map("business_id") @db.Uuid
+  professionalId String? @map("professional_id") @db.Uuid
+  /// Dia da semana ISO: 1 = segunda ... 7 = domingo.
+  weekday        Int     @db.SmallInt
+  /// Minutos desde a meia-noite local. O fim é exclusivo.
+  startMinute    Int     @map("start_minute") @db.SmallInt
+  endMinute      Int     @map("end_minute") @db.SmallInt
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  professional Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, professionalId, weekday])
+  @@map("working_hours")
+}
+
+/// Bloqueio de agenda: folga, feriado, compromisso. Sem profissional, fecha o negócio todo.
+model ScheduleBlock {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  businessId     String   @map("business_id") @db.Uuid
+  professionalId String?  @map("professional_id") @db.Uuid
+  startsAt       DateTime @map("starts_at") @db.Timestamptz(3)
+  endsAt         DateTime @map("ends_at") @db.Timestamptz(3)
+  reason         String?
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  professional Professional? @relation(fields: [professionalId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, startsAt])
+  @@map("schedule_blocks")
+}
+
+/// Cliente final de um negócio. Guardamos o mínimo: identidade no WhatsApp, telefone e nome.
+model Customer {
+  id                String    @id @default(uuid(7)) @db.Uuid
+  businessId        String    @map("business_id") @db.Uuid
+  /// ID do usuário no WhatsApp por portfólio de negócio (BSUID, campo user_id). Chave durável.
+  waUserId          String?   @map("wa_user_id")
+  /// wa_id exatamente como a Meta enviou. Use este valor para responder.
+  waId              String?   @map("wa_id")
+  /// Telefone normalizado com nono dígito, para busca e exibição.
+  phoneE164         String?   @map("phone_e164")
+  name              String?
+  remindersOptOut   Boolean   @default(false) @map("reminders_opt_out")
+  lastInteractionAt DateTime? @map("last_interaction_at") @db.Timestamptz(3)
+  /// Preenchido quando os dados pessoais foram apagados a pedido (LGPD).
+  anonymizedAt      DateTime? @map("anonymized_at") @db.Timestamptz(3)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  conversations Conversation[]
+
+  @@unique([businessId, id])
+  @@unique([businessId, waUserId])
+  @@unique([businessId, waId])
+  @@index([businessId, phoneE164])
+  @@map("customers")
+}
+
+model Appointment {
+  id             String            @id @default(uuid(7)) @db.Uuid
+  businessId     String            @map("business_id") @db.Uuid
+  customerId     String            @map("customer_id") @db.Uuid
+  professionalId String            @map("professional_id") @db.Uuid
+  serviceId      String            @map("service_id") @db.Uuid
+  startsAt       DateTime          @map("starts_at") @db.Timestamptz(3)
+  endsAt         DateTime          @map("ends_at") @db.Timestamptz(3)
+  status         AppointmentStatus @default(scheduled)
+  source         AppointmentSource
+  /// Preço no momento da marcação.
+  priceCents     Int               @map("price_cents")
+  notes          String?
+  /// ID em um sistema externo, para importação de agendas.
+  externalId     String?           @map("external_id")
+  cancelledAt    DateTime?         @map("cancelled_at") @db.Timestamptz(3)
+  cancelReason   String?           @map("cancel_reason")
+  createdAt      DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime          @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [businessId, customerId], references: [businessId, id], onDelete: NoAction)
+  professional Professional @relation(fields: [businessId, professionalId], references: [businessId, id], onDelete: NoAction)
+  service      Service      @relation(fields: [businessId, serviceId], references: [businessId, id], onDelete: NoAction)
+
+  @@unique([businessId, id])
+  @@index([businessId, startsAt])
+  @@index([businessId, professionalId, startsAt])
+  @@index([businessId, customerId, startsAt])
+  @@map("appointments")
+}
+
+/// Conversa de um cliente em um canal. No WhatsApp é o chat inteiro com aquele cliente.
+model Conversation {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  businessId     String           @map("business_id") @db.Uuid
+  customerId     String           @map("customer_id") @db.Uuid
+  channelId      String           @map("channel_id") @db.Uuid
+  mode           ConversationMode @default(agent)
+  handoffReason  String?          @map("handoff_reason")
+  /// Até quando a conversa fica com a equipe antes de voltar ao agente.
+  humanUntil     DateTime?        @map("human_until") @db.Timestamptz(3)
+  assignedUserId String?          @map("assigned_user_id") @db.Uuid
+  /// Estado do agente: proposta esperando confirmação e apelidos de agendamentos.
+  agentState     Json?            @map("agent_state")
+  /// Última mensagem do cliente. Abre a janela de 24h da Meta.
+  lastInboundAt  DateTime?        @map("last_inbound_at") @db.Timestamptz(3)
+  lastMessageAt  DateTime?        @map("last_message_at") @db.Timestamptz(3)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business      Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer      Customer       @relation(fields: [businessId, customerId], references: [businessId, id], onDelete: Cascade)
+  channel       Channel        @relation(fields: [businessId, channelId], references: [businessId, id], onDelete: Cascade)
+  assignedUser  User?          @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  messages      Message[]
+  agentSessions AgentSession[]
+
+  @@unique([businessId, id])
+  @@unique([businessId, customerId, channelId])
+  @@index([businessId, lastMessageAt])
+  @@map("conversations")
+}
+
+/// Mensagem legível da conversa, como aparece no histórico do painel.
+model Message {
+  id             String           @id @default(uuid(7)) @db.Uuid
+  businessId     String           @map("business_id") @db.Uuid
+  conversationId String           @map("conversation_id") @db.Uuid
+  direction      MessageDirection
+  author         MessageAuthor
+  kind           MessageKind
+  /// Texto da mensagem. De mídias guardamos só o tipo, nunca o conteúdo.
+  body           String?
+  /// Dados mínimos extras, como o payload de um botão ou o nome de um template.
+  payload        Json?
+  /// ID da mensagem na Meta (wamid). Impede que um webhook repetido duplique a mensagem.
+  externalId     String?          @unique @map("external_id")
+  deliveryStatus DeliveryStatus?  @map("delivery_status")
+  error          String?
+  /// Quando a mensagem do cliente foi tratada pelo agente ou pela equipe.
+  handledAt      DateTime?        @map("handled_at") @db.Timestamptz(3)
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [businessId, conversationId], references: [businessId, id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([businessId, createdAt])
+  @@map("messages")
+}
+
+/// Sessão do agente: o histórico exato enviado ao Claude, que só recebe acréscimos.
+/// Uma conversa longa vira várias sessões; a nova começa com um resumo do cliente.
+model AgentSession {
+  id             String             @id @default(uuid(7)) @db.Uuid
+  businessId     String             @map("business_id") @db.Uuid
+  conversationId String             @map("conversation_id") @db.Uuid
+  model          String
+  /// Hash do modelo, do prompt de sistema e das tools. Se mudar, abre-se uma sessão nova.
+  agentVersion   String             @map("agent_version")
+  systemPrompt   String             @map("system_prompt")
+  /// Mensagens no formato da API. Tipo json, e não jsonb, para preservar a ordem das chaves.
+  transcript     Json               @db.Json
+  status         AgentSessionStatus @default(active)
+  closeReason    String?            @map("close_reason")
+  startedAt      DateTime           @default(now()) @map("started_at") @db.Timestamptz(3)
+  lastActivityAt DateTime           @default(now()) @map("last_activity_at") @db.Timestamptz(3)
+  closedAt       DateTime?          @map("closed_at") @db.Timestamptz(3)
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [businessId, conversationId], references: [businessId, id], onDelete: Cascade)
+  runs         AgentRun[]
+
+  @@unique([businessId, id])
+  @@index([conversationId, status])
+  @@map("agent_sessions")
+}
+
+/// Uma execução do agente: tokens, tools chamadas, tempo e erro. Base para custo por negócio.
+model AgentRun {
+  id               String   @id @default(uuid(7)) @db.Uuid
+  businessId       String   @map("business_id") @db.Uuid
+  sessionId        String   @map("session_id") @db.Uuid
+  model            String
+  /// Chamadas à API da Anthropic neste turno.
+  requests         Int
+  inputTokens      Int      @map("input_tokens")
+  outputTokens     Int      @map("output_tokens")
+  cacheReadTokens  Int      @map("cache_read_tokens")
+  cacheWriteTokens Int      @map("cache_write_tokens")
+  toolCalls        Json     @map("tool_calls")
+  stopReason       String?  @map("stop_reason")
+  latencyMs        Int      @map("latency_ms")
+  error            String?
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  business Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  session  AgentSession @relation(fields: [businessId, sessionId], references: [businessId, id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@map("agent_runs")
+}
+
+/// Lembretes e confirmações enviados. A chave única impede envio duplicado.
+model Notification {
+  id             String             @id @default(uuid(7)) @db.Uuid
+  businessId     String             @map("business_id") @db.Uuid
+  /// ID do agendamento no provider, interno ou externo.
+  appointmentRef String             @map("appointment_ref")
+  kind           NotificationKind
+  status         NotificationStatus @default(pending)
+  messageId      String?            @map("message_id") @db.Uuid
+  error          String?
+  sentAt         DateTime?          @map("sent_at") @db.Timestamptz(3)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, appointmentRef, kind])
+  @@map("notifications")
+}
+
+/// Registro de quem fez o quê: exclusões de dados, handoffs, mudanças de configuração.
+model AuditLog {
+  id         String    @id @default(uuid(7)) @db.Uuid
+  businessId String    @map("business_id") @db.Uuid
+  actorType  ActorType @map("actor_type")
+  actorId    String?   @map("actor_id")
+  action     String
+  entityType String    @map("entity_type")
+  entityId   String?   @map("entity_id")
+  metadata   Json?
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, createdAt])
+  @@map("audit_logs")
+}

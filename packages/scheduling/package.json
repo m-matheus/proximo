@@ -1,0 +1,28 @@
+{
+  "name": "@proximo/scheduling",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./internal": "./src/internal/internal-provider.ts",
+    "./appbarber": "./src/appbarber/appbarber-provider.ts",
+    "./factory": "./src/factory.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@proximo/core": "workspace:*",
+    "@proximo/db": "workspace:*",
+    "luxon": "catalog:"
+  },
+  "devDependencies": {
+    "@types/luxon": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
