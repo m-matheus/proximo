@@ -15,7 +15,12 @@ Há dois cenários de agenda, e o agente funciona igual nos dois:
 - **Cenário B: agenda própria do Próximo.** Implementado e testado.
 
 Sem API, uma barbearia só adota o Próximo se trocar de sistema, porque duas agendas geram horário
-duplicado. Por isso o roadmap tem uma fase de troca, com as funções que o dono usa todo dia.
+duplicado. A troca é o maior risco: numa entrevista com um barbeiro da região, ele contou que outro
+sistema já foi oferecido a eles e não pegou, porque a equipe não se adaptou à interface. Por isso:
+
+- O painel segue o jeito de usar do AppBarber: fluxos, nomes e onde fica cada coisa. A identidade
+  visual é do Próximo.
+- A fase de troca, com as funções que o dono usa todo dia, vem antes do primeiro cliente real.
 
 ## Estrutura
 
@@ -190,6 +195,9 @@ estável e em cache.
   listagem. Isso economiza uma ida e volta por conversa, e mudanças no catálogo abrem sessão nova.
 - **Login.** As tabelas de usuário e vínculo existem; as de sessão de login entram com o painel.
 - **Versões.** O pnpm 12 recusou três pacotes publicados no mesmo dia; ficaram as versões anteriores.
+- **Roadmap.** A fase de troca passou para antes do Tech Provider, e o primeiro cliente real só entra
+  depois dela. Veio da entrevista com um barbeiro: a dor dele é demorar a responder no WhatsApp, que
+  o agente já resolve, e o risco é a troca de sistema.
 
 ## Roadmap
 
@@ -197,11 +205,15 @@ estável e em cache.
 2. Concluído: agente de ponta a ponta, com agendar, remarcar, cancelar e passar para a equipe.
 3. Lembretes de 24h e 2h e confirmação de presença, com templates aprovados e botões tratados sem o
    Claude.
-4. Painel do dia a dia com login: agenda, cadastros, bloqueios, conversas, assumir e devolver, e
-   exclusão de dados.
-5. Tech Provider e Embedded Signup, antes do primeiro cliente real.
-6. Fase de troca: comandas, comissões e vales, caixa, relatórios, lista de espera.
+4. Painel do dia a dia com login, no jeito de usar do AppBarber: agenda, cadastros, bloqueios,
+   conversas, assumir e devolver, e exclusão de dados.
+5. Fase de troca: comandas, comissões e vales, caixa, relatórios, lista de espera. O escopo final
+   depende de quais funções do AppBarber os barbeiros usam todo dia.
+6. Tech Provider e Embedded Signup. A verificação da Meta costuma demorar, então a papelada pode
+   começar antes.
 7. Crescimento, na ordem que as entrevistas com barbeiros indicarem.
+
+O primeiro cliente real entra depois das etapas 4 a 6.
 
 ## Pendências conhecidas
 
