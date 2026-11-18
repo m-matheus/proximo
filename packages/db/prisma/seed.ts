@@ -6,8 +6,8 @@ loadRootEnv();
 
 const db = createDb(process.env.DATABASE_URL ?? "");
 
-const phoneNumberId = process.env.WHATSAPP_TEST_PHONE_NUMBER_ID;
-const accessToken = process.env.WHATSAPP_TEST_ACCESS_TOKEN;
+const phoneNumberId = process.env.WHATSAPP_DEMO_PHONE_NUMBER_ID;
+const accessToken = process.env.WHATSAPP_DEMO_ACCESS_TOKEN;
 
 const demo = await seedDemoBusiness(db, {
   whatsapp:
@@ -15,7 +15,7 @@ const demo = await seedDemoBusiness(db, {
       ? {
           phoneNumberId,
           accessToken,
-          wabaId: process.env.WHATSAPP_TEST_WABA_ID || undefined,
+          wabaId: process.env.WHATSAPP_DEMO_WABA_ID || undefined,
           encryptionKey: parseEncryptionKey(process.env.ENCRYPTION_KEY),
         }
       : undefined,
@@ -28,8 +28,8 @@ console.log(
 );
 console.log(
   demo.whatsappChannelId
-    ? "Canal do WhatsApp de teste configurado."
-    : "Sem WHATSAPP_TEST_PHONE_NUMBER_ID e WHATSAPP_TEST_ACCESS_TOKEN: só o simulador foi configurado.",
+    ? "Canal do WhatsApp configurado."
+    : "Sem WHATSAPP_DEMO_PHONE_NUMBER_ID e WHATSAPP_DEMO_ACCESS_TOKEN: só o simulador foi configurado.",
 );
 
 await db.$disconnect();

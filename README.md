@@ -64,44 +64,82 @@ agendamentos dele.
 Sem `ANTHROPIC_API_KEY`, o agente não roda. O cliente recebe um aviso de falha técnica e a
 conversa passa para a equipe. É o comportamento esperado quando a API do Claude falha.
 
-## Conectar o número de teste da Meta
+## Conectar o WhatsApp
 
-O número de teste da Meta não exige forma de pagamento e basta para conversar com o agente pelo
-WhatsApp de verdade.
+Um único webhook atende qualquer número: a API acha o canal pelo `phone_number_id` de cada evento.
+O seed cria o canal da barbearia de exemplo com os dados de `WHATSAPP_DEMO_*` e grava o token
+cifrado. Sem o canal, a API recebe o webhook e descarta o evento.
+
+Há dois caminhos. O número de teste da Meta é rápido e não exige pagamento, mas o token dele vence
+em poucas horas. Um número próprio, como um chip pré-pago, tem token permanente.
+
+Para produção, cada negócio conecta o próprio número por Embedded Signup, o que exige o Próximo
+como Tech Provider da Meta.
+
+### Configuração comum
 
 1. No [painel de desenvolvedores da Meta](https://developers.facebook.com), crie um app com o
-   caso de uso do WhatsApp. A Meta fornece um número de teste.
-2. Na Etapa 1 da configuração da API, em **Para → Gerenciar lista de números de telefone**,
+   caso de uso do WhatsApp.
+2. Nas configurações básicas do app, copie o App secret para `WHATSAPP_APP_SECRET`.
+3. Invente um token e coloque em `WHATSAPP_VERIFY_TOKEN`.
+4. Abra o túnel com `pnpm tunnel` (veja [Túnel](#túnel)).
+5. Na configuração de webhooks do WhatsApp, cadastre `https://<domínio do ngrok>/webhooks/whatsapp`
+   com o mesmo verify token e assine o campo `messages`.
+
+O app também precisa estar inscrito na conta do WhatsApp do número. Sem a inscrição, o webhook
+nunca dispara, mesmo verificado e com `messages` assinado, e o painel não mostra isso. Com as
+variáveis do `.env` no terminal:
+
+```bash
+# lista os apps inscritos; o seu app precisa aparecer
+curl "https://graph.facebook.com/v26.0/$WHATSAPP_DEMO_WABA_ID/subscribed_apps" \
+  -H "Authorization: Bearer $WHATSAPP_DEMO_ACCESS_TOKEN"
+# inscreve o app; basta uma vez por conta
+curl -X POST "https://graph.facebook.com/v26.0/$WHATSAPP_DEMO_WABA_ID/subscribed_apps" \
+  -H "Authorization: Bearer $WHATSAPP_DEMO_ACCESS_TOKEN"
+```
+
+### Número de teste
+
+1. Na Etapa 1 da configuração da API, em **Para → Gerenciar lista de números de telefone**,
    cadastre seu celular e confirme o código que chega no WhatsApp. O número de teste só envia
    para quem está nessa lista.
-3. Ainda na Etapa 1, gere o token de acesso e copie o Phone number ID e o ID da conta do WhatsApp.
-4. Preencha `WHATSAPP_TEST_PHONE_NUMBER_ID`, `WHATSAPP_TEST_ACCESS_TOKEN` e
-   `WHATSAPP_TEST_WABA_ID` no `.env` e rode `pnpm db:seed`. O seed grava o token cifrado no canal;
-   sem ele, a API recebe o webhook e descarta o evento.
-5. Nas configurações básicas do app, copie o App secret para `WHATSAPP_APP_SECRET`.
-6. Invente um token e coloque em `WHATSAPP_VERIFY_TOKEN`.
-7. Abra o túnel com `pnpm tunnel` (veja abaixo).
-8. Na configuração de webhooks do WhatsApp, cadastre `https://<domínio do ngrok>/webhooks/whatsapp`
-   com o mesmo verify token e assine o campo `messages`.
-9. Confira se o app está inscrito na conta do WhatsApp. Sem a inscrição, o webhook nunca dispara,
-   mesmo verificado e com `messages` assinado, e o painel não mostra isso. Com as variáveis do
-   `.env` no terminal:
-   ```bash
-   # lista os apps inscritos; o seu app precisa aparecer
-   curl "https://graph.facebook.com/v26.0/$WHATSAPP_TEST_WABA_ID/subscribed_apps" \
-     -H "Authorization: Bearer $WHATSAPP_TEST_ACCESS_TOKEN"
-   # inscreve o app; basta uma vez
-   curl -X POST "https://graph.facebook.com/v26.0/$WHATSAPP_TEST_WABA_ID/subscribed_apps" \
-     -H "Authorization: Bearer $WHATSAPP_TEST_ACCESS_TOKEN"
-   ```
-10. Mande uma mensagem do celular para o número de teste.
+2. Ainda na Etapa 1, gere o token de acesso e copie o Phone number ID e o ID da conta do WhatsApp.
+3. Preencha `WHATSAPP_DEMO_PHONE_NUMBER_ID`, `WHATSAPP_DEMO_ACCESS_TOKEN` e
+   `WHATSAPP_DEMO_WABA_ID` no `.env` e rode `pnpm db:seed`.
+4. Confira a inscrição do app. Na conta de teste, o painel não inscreveu o app sozinho.
+5. Mande uma mensagem do celular para o número de teste.
 
 O token da Etapa 1 vence em poucas horas, não em um dia: nos testes, durou menos de duas. Quando
 ele vencer, as mensagens continuam chegando, mas a resposta do agente não sai. Gere outro, atualize
 o `.env` e rode `pnpm db:seed` de novo.
 
-Para produção, cada negócio conecta o próprio número por Embedded Signup, o que exige o Próximo
-como Tech Provider da Meta.
+### Número próprio
+
+Não ative o WhatsApp no número antes: um número em uso no app precisa ser apagado de lá para
+entrar na Cloud API. Se for um chip pré-pago, mantenha a recarga em dia para não perder o número.
+
+1. Na Etapa 2 da configuração da API, clique em **Adicionar número de telefone**. Escolha o
+   portfólio empresarial da empresa, crie uma conta do WhatsApp, defina o nome de exibição e
+   confirme o número pelo código por SMS. A Etapa 1 continua mostrando só o número de teste; não
+   cadastre o número próprio como destinatário lá.
+2. Cadastre a forma de pagamento. Só templates são cobrados, como os lembretes; respostas dentro
+   da janela de 24 horas, não. Escolha a moeda com cuidado: a Meta não deixa trocar depois.
+3. Pule o envio de mensagem da Etapa 2. Ele manda um template, que é cobrado, e não testa o Próximo.
+4. Gere o token permanente em [Configurações do negócio](https://business.facebook.com/settings):
+   - **Usuários → Usuários do sistema → Adicionar**, com a função **Funcionário**;
+   - **Atribuir ativos**: o app e a conta do WhatsApp, os dois com controle total;
+   - **Gerar token**: o app, validade **Nunca**, permissões `whatsapp_business_messaging` e
+     `whatsapp_business_management`.
+5. Em **Contas → Contas do WhatsApp**, a conta mostra o ID. O Phone number ID sai da API, e o
+   número precisa aparecer com `"status": "CONNECTED"`:
+   ```bash
+   curl "https://graph.facebook.com/v26.0/$WHATSAPP_DEMO_WABA_ID/phone_numbers" \
+     -H "Authorization: Bearer $WHATSAPP_DEMO_ACCESS_TOKEN"
+   ```
+6. Preencha `WHATSAPP_DEMO_*` no `.env`, rode `pnpm db:seed` e confira a inscrição do app. No
+   número próprio, o painel registrou o número na Cloud API e inscreveu o app sozinho.
+7. Mande uma mensagem do celular para o número.
 
 ### Túnel
 
@@ -180,7 +218,8 @@ Todas estão no [.env.example](.env.example), com comentários. As principais:
 - **Porta 5432 ou 6379 ocupada**: defina `POSTGRES_PORT` ou `REDIS_PORT` antes do
   `pnpm services:up` e ajuste as URLs no `.env`.
 - **Mensagem do celular não chega à API**: confira se o `pnpm tunnel` está aberto (endpoint
-  offline no ngrok dá 404) e se o app está inscrito na conta do WhatsApp (passo 9 acima).
+  offline no ngrok dá 404) e se o app está inscrito na conta do WhatsApp (veja
+  [Configuração comum](#configuração-comum)).
 - **Mensagem chega, mas a resposta não**: token vencido ou celular fora da lista de destinatários.
   O worker registra `envio recusado pelo canal` com o código da Meta (190 é token vencido; 131030,
   destinatário fora da lista), e a mensagem enviada guarda o erro na coluna `error`.
