@@ -66,20 +66,57 @@ conversa passa para a equipe. É o comportamento esperado quando a API do Claude
 
 ## Conectar o número de teste da Meta
 
+O número de teste da Meta não exige forma de pagamento e basta para conversar com o agente pelo
+WhatsApp de verdade.
+
 1. No [painel de desenvolvedores da Meta](https://developers.facebook.com), crie um app com o
    caso de uso do WhatsApp. A Meta fornece um número de teste.
-2. Na configuração da API do WhatsApp, copie o Phone number ID e gere um token de acesso temporário.
-3. Preencha `WHATSAPP_TEST_PHONE_NUMBER_ID`, `WHATSAPP_TEST_ACCESS_TOKEN` e, se quiser,
-   `WHATSAPP_TEST_WABA_ID` no `.env`, e rode `pnpm db:seed` de novo.
-4. Nas configurações básicas do app, copie o App secret para `WHATSAPP_APP_SECRET`.
-5. Invente um token e coloque em `WHATSAPP_VERIFY_TOKEN`.
-6. Exponha a API com um túnel HTTPS, por exemplo `cloudflared tunnel --url http://localhost:3001`.
-7. Na configuração de webhooks do WhatsApp, cadastre `https://<seu-túnel>/webhooks/whatsapp` com o
-   mesmo verify token e assine o campo `messages`.
-8. Cadastre seu celular como destinatário de teste e mande uma mensagem para o número de teste.
+2. Na Etapa 1 da configuração da API, em **Para → Gerenciar lista de números de telefone**,
+   cadastre seu celular e confirme o código que chega no WhatsApp. O número de teste só envia
+   para quem está nessa lista.
+3. Ainda na Etapa 1, gere o token de acesso e copie o Phone number ID e o ID da conta do WhatsApp.
+4. Preencha `WHATSAPP_TEST_PHONE_NUMBER_ID`, `WHATSAPP_TEST_ACCESS_TOKEN` e
+   `WHATSAPP_TEST_WABA_ID` no `.env` e rode `pnpm db:seed`. O seed grava o token cifrado no canal;
+   sem ele, a API recebe o webhook e descarta o evento.
+5. Nas configurações básicas do app, copie o App secret para `WHATSAPP_APP_SECRET`.
+6. Invente um token e coloque em `WHATSAPP_VERIFY_TOKEN`.
+7. Abra o túnel com `pnpm tunnel` (veja abaixo).
+8. Na configuração de webhooks do WhatsApp, cadastre `https://<domínio do ngrok>/webhooks/whatsapp`
+   com o mesmo verify token e assine o campo `messages`.
+9. Confira se o app está inscrito na conta do WhatsApp. Sem a inscrição, o webhook nunca dispara,
+   mesmo verificado e com `messages` assinado, e o painel não mostra isso. Com as variáveis do
+   `.env` no terminal:
+   ```bash
+   # lista os apps inscritos; o seu app precisa aparecer
+   curl "https://graph.facebook.com/v26.0/$WHATSAPP_TEST_WABA_ID/subscribed_apps" \
+     -H "Authorization: Bearer $WHATSAPP_TEST_ACCESS_TOKEN"
+   # inscreve o app; basta uma vez
+   curl -X POST "https://graph.facebook.com/v26.0/$WHATSAPP_TEST_WABA_ID/subscribed_apps" \
+     -H "Authorization: Bearer $WHATSAPP_TEST_ACCESS_TOKEN"
+   ```
+10. Mande uma mensagem do celular para o número de teste.
 
-O token temporário da Meta expira em 24 horas. Para produção, cada negócio conecta o próprio
-número por Embedded Signup, o que exige o Próximo como Tech Provider da Meta.
+O token da Etapa 1 vence em poucas horas, não em um dia: nos testes, durou menos de duas. Quando
+ele vencer, as mensagens continuam chegando, mas a resposta do agente não sai. Gere outro, atualize
+o `.env` e rode `pnpm db:seed` de novo.
+
+Para produção, cada negócio conecta o próprio número por Embedded Signup, o que exige o Próximo
+como Tech Provider da Meta.
+
+### Túnel
+
+`pnpm tunnel` expõe a API pelo ngrok, no domínio fixo da conta. O domínio não muda entre
+execuções, então o webhook é cadastrado na Meta uma vez só. A regra em `ngrok-policy.yml` deixa
+passar só `/webhooks/whatsapp`. Sem ela, as rotas do simulador ficariam abertas na internet.
+
+O script lê só o `ngrok.local.yml`, que fica fora do git e guarda o authtoken. Crie uma vez:
+
+```bash
+ngrok config add-authtoken <authtoken> --config ngrok.local.yml
+```
+
+A conta grátis do ngrok tem um único domínio, e dois projetos não usam o mesmo domínio ao mesmo
+tempo. Use uma conta só para o Próximo.
 
 ## Comandos
 
@@ -97,6 +134,7 @@ número por Embedded Signup, o que exige o Próximo como Tech Provider da Meta.
 | `pnpm db:seed` | Cria a barbearia de exemplo |
 | `pnpm db:studio` | Abre o Prisma Studio |
 | `pnpm keygen` | Gera uma ENCRYPTION_KEY |
+| `pnpm tunnel` | Abre o túnel do ngrok para o webhook do WhatsApp |
 
 Os testes de integração usam o banco `proximo_test`, criado pelo docker-compose, e o Redis local.
 Suba os serviços antes de `pnpm test`.
@@ -141,3 +179,8 @@ Todas estão no [.env.example](.env.example), com comentários. As principais:
 - **Testes falham com erro de conexão**: suba os serviços com `pnpm services:up`.
 - **Porta 5432 ou 6379 ocupada**: defina `POSTGRES_PORT` ou `REDIS_PORT` antes do
   `pnpm services:up` e ajuste as URLs no `.env`.
+- **Mensagem do celular não chega à API**: confira se o `pnpm tunnel` está aberto (endpoint
+  offline no ngrok dá 404) e se o app está inscrito na conta do WhatsApp (passo 9 acima).
+- **Mensagem chega, mas a resposta não**: token vencido ou celular fora da lista de destinatários.
+  O worker registra `envio recusado pelo canal` com o código da Meta (190 é token vencido; 131030,
+  destinatário fora da lista), e a mensagem enviada guarda o erro na coluna `error`.

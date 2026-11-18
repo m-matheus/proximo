@@ -1,0 +1,9 @@
+# Regra do túnel de desenvolvimento (pnpm tunnel): só o webhook do WhatsApp passa.
+# Sem ela, as rotas /dev/simulator da API ficariam abertas na internet.
+on_http_request:
+  - expressions:
+      - "req.url.path != '/webhooks/whatsapp'"
+    actions:
+      - type: deny
+        config:
+          status_code: 404

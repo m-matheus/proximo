@@ -24,7 +24,8 @@
     "db:migrate": "pnpm --filter @proximo/db migrate:dev",
     "db:deploy": "pnpm --filter @proximo/db migrate:deploy",
     "db:seed": "pnpm --filter @proximo/db seed",
-    "db:studio": "pnpm --filter @proximo/db studio"
+    "db:studio": "pnpm --filter @proximo/db studio",
+    "tunnel": "ngrok http 3001 --config=ngrok.local.yml --traffic-policy-file=ngrok-policy.yml"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",
