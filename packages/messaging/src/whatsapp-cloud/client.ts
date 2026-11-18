@@ -5,6 +5,7 @@ import {
   type SendResult,
   type TemplateMessage,
 } from "../channel";
+import { graphRequest } from "./graph";
 
 /**
  * Cliente da WhatsApp Cloud API (Graph API da Meta) para um número.
@@ -21,9 +22,6 @@ export interface WhatsAppCloudOptions {
   fetch?: typeof fetch;
 }
 
-/** Códigos de erro da Meta que passam com o tempo, como limites de taxa. */
-const RETRYABLE_META_CODES = new Set([1, 2, 4, 80007, 130429, 131000, 131056]);
-
 function recipientFields(to: Recipient): Record<string, string> {
   if (to.waId) {
     return { to: to.waId };
@@ -35,23 +33,12 @@ function recipientFields(to: Recipient): Record<string, string> {
   throw new ChannelError("Destinatário sem wa_id nem user_id.", { retryable: false });
 }
 
-interface GraphErrorBody {
-  error?: { message?: string; code?: number; error_data?: { details?: string } };
-  messages?: Array<{ id?: string }>;
-}
-
 export class WhatsAppCloudChannel implements MessagingChannel {
   readonly type = "whatsapp_cloud" as const;
-  private readonly options: Required<Omit<WhatsAppCloudOptions, "fetch">> & {
-    fetch: typeof fetch;
-  };
+  private readonly options: WhatsAppCloudOptions;
 
   constructor(options: WhatsAppCloudOptions) {
-    this.options = {
-      baseUrl: "https://graph.facebook.com",
-      ...options,
-      fetch: options.fetch ?? fetch,
-    };
+    this.options = options;
   }
 
   async sendText(to: Recipient, text: string): Promise<SendResult> {
@@ -113,44 +100,7 @@ export class WhatsAppCloudChannel implements MessagingChannel {
     return { externalId };
   }
 
-  private async post(payload: Record<string, unknown>): Promise<GraphErrorBody> {
-    const { baseUrl, graphApiVersion, phoneNumberId, accessToken } = this.options;
-    let response: Response;
-    try {
-      response = await this.options.fetch(
-        `${baseUrl}/${graphApiVersion}/${phoneNumberId}/messages`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-          signal: AbortSignal.timeout(15_000),
-        },
-      );
-    } catch (error) {
-      throw new ChannelError(`Falha de rede ao falar com a Meta: ${String(error)}`, {
-        retryable: true,
-      });
-    }
-
-    const body = (await response.json().catch(() => ({}))) as GraphErrorBody;
-    if (!response.ok) {
-      const code = body.error?.code ?? null;
-      const detail = body.error?.error_data?.details;
-      const message = [body.error?.message ?? `HTTP ${response.status}`, detail]
-        .filter(Boolean)
-        .join(": ");
-      throw new ChannelError(`Meta recusou a requisição: ${message}`, {
-        status: response.status,
-        code,
-        retryable:
-          response.status === 429 ||
-          response.status >= 500 ||
-          (code !== null && RETRYABLE_META_CODES.has(code)),
-      });
-    }
-    return body;
+  private post(payload: Record<string, unknown>): Promise<{ messages?: Array<{ id?: string }> }> {
+    return graphRequest(this.options, "POST", `${this.options.phoneNumberId}/messages`, payload);
   }
 }

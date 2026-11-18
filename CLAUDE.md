@@ -66,6 +66,11 @@ uso proíbem engenharia reversa e captura de dados.
   dígito, e o formato errado é aceito pela Meta sem ser entregue.
 - `waUserId`, o BSUID, é a chave durável do cliente; o telefone pode faltar.
 - `normalizePhoneE164` serve para busca e exibição, não para envio.
+- Templates ficam em `packages/messaging/src/templates.ts`, com o texto igual ao aprovado na Meta.
+  Mudou o texto, crie o template com outro nome e rode `pnpm whatsapp:templates --create`, que
+  publica na Meta.
+- Lembretes leem a agenda só pelo provider, e o toque nos botões é resolvido no worker antes do
+  agente. A chave única de `notifications` é o que impede lembrete duplicado.
 
 ## Banco e migrations
 
@@ -73,6 +78,10 @@ uso proíbem engenharia reversa e captura de dados.
 - O que o Prisma não expressa vai em SQL escrito à mão: exclusion constraint contra horário
   sobreposto e checks. Crie com `pnpm --filter @proximo/db exec prisma migrate dev --create-only
   --name <nome>`, edite o SQL e aplique com `pnpm db:migrate`.
+- Fora de um terminal interativo, como num agente, o `migrate dev` recusa rodar. Gere o SQL com
+  `pnpm --filter @proximo/db exec prisma migrate diff --from-config-datasource --to-schema
+  prisma/schema.prisma --script`, salve numa pasta nova de `prisma/migrations` e aplique com
+  `prisma migrate deploy`.
 - Nunca edite uma migration que já foi aplicada em algum ambiente.
 
 ## Testes

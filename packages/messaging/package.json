@@ -7,11 +7,14 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "templates": "tsx scripts/templates.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@proximo/core": "workspace:*",
     "@types/node": "catalog:",
+    "tsx": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

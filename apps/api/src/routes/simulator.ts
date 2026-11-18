@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizePhoneE164 } from "@proximo/core";
 import type { Db } from "@proximo/db";
-import type { InboundJob } from "@proximo/queue";
+import { type InboundJob, REMINDER_KINDS, type ReminderJob } from "@proximo/queue";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { ingestInboundMessage } from "../ingest";
@@ -14,6 +14,7 @@ import { ingestInboundMessage } from "../ingest";
 export interface SimulatorRouteOptions {
   db: Db;
   enqueueInbound: (job: InboundJob) => Promise<void>;
+  enqueueReminder: (job: Extract<ReminderJob, { type: "send" }>) => Promise<void>;
 }
 
 const sendSchema = z.object({
@@ -21,7 +22,28 @@ const sendSchema = z.object({
   phone: z.string().min(8),
   name: z.string().trim().max(80).optional(),
   text: z.string().trim().min(1).max(2000),
+  /** Toque num botão de resposta rápida: o texto é o do botão. */
+  buttonPayload: z.string().min(1).max(256).optional(),
 });
+
+const reminderSchema = z.object({ kind: z.enum(REMINDER_KINDS) });
+
+/** Botões de um template enviado, para o simulador mostrar e tocar. */
+function buttonsOf(payload: unknown): Array<{ label: string; payload: string }> {
+  const data = payload as {
+    buttons?: unknown;
+    template?: { quickReplyPayloads?: unknown };
+  } | null;
+  const labels = Array.isArray(data?.buttons) ? data.buttons : [];
+  const payloads = Array.isArray(data?.template?.quickReplyPayloads)
+    ? data.template.quickReplyPayloads
+    : [];
+  return labels.flatMap((label, index) =>
+    typeof label === "string" && typeof payloads[index] === "string"
+      ? [{ label, payload: payloads[index] as string }]
+      : [],
+  );
+}
 
 export async function simulatorRoutes(
   app: FastifyInstance,
@@ -47,7 +69,7 @@ export async function simulatorRoutes(
     if (!parsed.success) {
       return reply.code(400).send({ error: z.prettifyError(parsed.error) });
     }
-    const { channelId, phone, name, text } = parsed.data;
+    const { channelId, phone, name, text, buttonPayload } = parsed.data;
     const phoneE164 = normalizePhoneE164(phone, { defaultCountry: "BR" });
     if (!phoneE164) {
       return reply.code(400).send({ error: "Telefone inválido." });
@@ -67,9 +89,9 @@ export async function simulatorRoutes(
         from: { waId: digits, waUserId: `SIM.${digits}`, profileName: name || null },
         externalId: `sim.${randomUUID()}`,
         timestamp: new Date(),
-        kind: "text",
+        kind: buttonPayload ? "button" : "text",
         text,
-        buttonPayload: null,
+        buttonPayload: buttonPayload ?? null,
       },
     );
     if (result.status !== "created") {
@@ -93,6 +115,7 @@ export async function simulatorRoutes(
             author: true,
             kind: true,
             body: true,
+            payload: true,
             deliveryStatus: true,
             createdAt: true,
           },
@@ -113,7 +136,10 @@ export async function simulatorRoutes(
       mode: conversation.mode,
       handoffReason: conversation.handoffReason,
       customer: conversation.customer,
-      messages: conversation.messages,
+      messages: conversation.messages.map(({ payload, ...message }) => ({
+        ...message,
+        buttons: message.kind === "template" ? buttonsOf(payload) : [],
+      })),
       appointments: appointments.map((appointment) => ({
         id: appointment.id,
         service: appointment.service.name,
@@ -122,6 +148,44 @@ export async function simulatorRoutes(
         status: appointment.status,
       })),
     };
+  });
+
+  /** Manda agora um lembrete do agendamento, pelo mesmo código da varredura do worker. */
+  app.post("/dev/simulator/appointments/:id/reminders", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = reminderSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: z.prettifyError(parsed.error) });
+    }
+    const appointment = await db.appointment.findFirst({
+      where: { id, customer: { conversations: { some: { channel: { type: "simulator" } } } } },
+      select: { id: true, businessId: true, startsAt: true, status: true },
+    });
+    if (!appointment) {
+      return reply.code(404).send({ error: "Agendamento de simulação não encontrado." });
+    }
+    if (appointment.status !== "scheduled" && appointment.status !== "confirmed") {
+      return reply.code(409).send({ error: "Esse agendamento não está ativo." });
+    }
+    const existing = await db.notification.findFirst({
+      where: {
+        businessId: appointment.businessId,
+        appointmentRef: appointment.id,
+        kind: parsed.data.kind,
+        appointmentStartsAt: appointment.startsAt,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return reply.code(409).send({ error: "Esse lembrete já foi enviado para este horário." });
+    }
+    await options.enqueueReminder({
+      type: "send",
+      businessId: appointment.businessId,
+      appointmentId: appointment.id,
+      kind: parsed.data.kind,
+    });
+    return reply.code(202).send({ ok: true });
   });
 
   /** Apaga o cliente simulado e tudo dele, para recomeçar o teste do zero. */

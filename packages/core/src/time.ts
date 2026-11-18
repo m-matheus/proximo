@@ -58,11 +58,16 @@ export function formatShortDate(date: Date, timezone: string): string {
   return `${weekday} ${zoned.toFormat("dd/MM")}`;
 }
 
-/** "quarta, 01/10 às 09:00" no fuso do negócio. */
-export function formatDateTimeLong(date: Date, timezone: string): string {
+/** "quarta, 01/10" no fuso do negócio. */
+export function formatDateLong(date: Date, timezone: string): string {
   const zoned = toZoned(date, timezone);
   const weekday = WEEKDAY_NAMES_PT[zoned.weekday as IsoWeekday];
-  return `${weekday}, ${zoned.toFormat("dd/MM")} às ${zoned.toFormat("HH:mm")}`;
+  return `${weekday}, ${zoned.toFormat("dd/MM")}`;
+}
+
+/** "quarta, 01/10 às 09:00" no fuso do negócio. */
+export function formatDateTimeLong(date: Date, timezone: string): string {
+  return `${formatDateLong(date, timezone)} às ${formatTime(date, timezone)}`;
 }
 
 export function minutesToTime(minutes: number): string {

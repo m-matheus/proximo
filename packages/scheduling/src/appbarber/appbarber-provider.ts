@@ -89,6 +89,11 @@ export class AppBarberSchedulingProvider implements SchedulingProvider {
     throw new NotImplementedError(NOT_AVAILABLE);
   }
 
+  async confirmAppointment(_appointmentId: string): Promise<Appointment> {
+    // TODO: marcar a presença como confirmada, se o AppBarber tiver esse status.
+    throw new NotImplementedError(NOT_AVAILABLE);
+  }
+
   async getAppointment(_appointmentId: string): Promise<Appointment | null> {
     // TODO: buscar um agendamento pelo ID do AppBarber.
     throw new NotImplementedError(NOT_AVAILABLE);

@@ -15,7 +15,7 @@ import {
   sessionRotationReason,
 } from "@proximo/agent";
 import { localDateString } from "@proximo/core";
-import type { Db, Message, Prisma } from "@proximo/db";
+import type { Business, Db, Message, Prisma } from "@proximo/db";
 import {
   acquireLock,
   conversationLockKey,
@@ -25,8 +25,10 @@ import {
   type Redis,
   releaseLock,
 } from "@proximo/queue";
+import type { SchedulingProvider } from "@proximo/scheduling";
 import { createSchedulingProvider } from "@proximo/scheduling/factory";
 import type { ChannelRegistry } from "./channels";
+import { type ButtonOutcome, resolveReminderButtons } from "./reminder-buttons";
 
 /**
  * Processa as mensagens de um cliente: decide se o agente responde, roda o turno,
@@ -55,6 +57,22 @@ export interface WorkerDeps {
   };
   now: () => Date;
   logger: Logger;
+  /** Agenda do negócio. Sem isto, usa a configurada no negócio; os testes injetam outra. */
+  providerFor?: (business: Business) => SchedulingProvider;
+}
+
+export function schedulingProviderFor(
+  deps: Pick<WorkerDeps, "db" | "now" | "encryptionKey" | "providerFor">,
+  business: Business,
+): SchedulingProvider {
+  return (
+    deps.providerFor?.(business) ??
+    createSchedulingProvider(business, {
+      db: deps.db,
+      now: deps.now,
+      ...(deps.encryptionKey ? { encryptionKey: deps.encryptionKey } : {}),
+    })
+  );
 }
 
 /** Outro job está atendendo a mesma conversa. O processador reagenda este. */
@@ -74,6 +92,7 @@ export type InboundOutcome =
   | "unsupported_media"
   | "rate_limited"
   | "schedule_unavailable"
+  | "reminder_button"
   | "agent";
 
 const LOCK_TTL_MS = 5 * 60 * 1000;
@@ -236,9 +255,45 @@ async function processConversation(job: InboundJob, deps: WorkerDeps): Promise<I
     return "inactive";
   }
 
-  const pending = await pendingMessages(db, conversation.id);
-  if (pending.length === 0) {
+  const received = await pendingMessages(db, conversation.id);
+  if (received.length === 0) {
     return "nothing";
+  }
+
+  // Botões do lembrete: confirmar e cancelar se resolvem aqui, sem o Claude, mesmo com a
+  // conversa na equipe. Remarcar segue para o agente, descrito com o horário.
+  const buttons = received.some((message) => message.kind === "button")
+    ? await resolveReminderButtons(
+        {
+          db,
+          provider: schedulingProviderFor(deps, conversation.business),
+          business: conversation.business,
+          customerId: conversation.customerId,
+          now,
+        },
+        received,
+      )
+    : new Map<string, ButtonOutcome>();
+  const descriptions = new Map<string, string>();
+  for (const [messageId, outcome] of buttons) {
+    if (outcome.type === "reply") {
+      await replyDirectly(deps, conversation, [messageId], outcome.text, outcome.handoff);
+      const externalId = received.find((message) => message.id === messageId)?.externalId;
+      if (externalId && conversation.channel.type === "whatsapp_cloud") {
+        deps.channels
+          .get(conversation.channel)
+          .markAsRead(externalId)
+          .catch((error: unknown) => {
+            deps.logger.warn({ error: String(error) }, "não foi possível marcar como lida");
+          });
+      }
+    } else {
+      descriptions.set(messageId, outcome.description);
+    }
+  }
+  const pending = received.filter((message) => buttons.get(message.id)?.type !== "reply");
+  if (pending.length === 0) {
+    return "reminder_button";
   }
   const pendingIds = pending.map((message) => message.id);
 
@@ -287,11 +342,7 @@ async function processConversation(job: InboundJob, deps: WorkerDeps): Promise<I
     return "rate_limited";
   }
 
-  const provider = createSchedulingProvider(conversation.business, {
-    db,
-    now: deps.now,
-    ...(deps.encryptionKey ? { encryptionKey: deps.encryptionKey } : {}),
-  });
+  const provider = schedulingProviderFor(deps, conversation.business);
 
   let catalogData: Awaited<ReturnType<typeof loadCatalog>>;
   try {
@@ -399,7 +450,9 @@ async function processConversation(job: InboundJob, deps: WorkerDeps): Promise<I
       phoneE164: conversation.customer.phoneE164,
       profileName,
     },
-    customerMessages: pending.map(describeInbound).filter(Boolean),
+    customerMessages: pending
+      .map((message) => descriptions.get(message.id) ?? describeInbound(message))
+      .filter(Boolean),
     carryOver,
     now,
     saveState: async (state) => {
@@ -523,7 +576,7 @@ async function processConversation(job: InboundJob, deps: WorkerDeps): Promise<I
   return "agent";
 }
 
-async function loadCatalog(provider: ReturnType<typeof createSchedulingProvider>) {
+async function loadCatalog(provider: SchedulingProvider) {
   const [services, professionals, openingHours] = await Promise.all([
     provider.listServices(),
     provider.listProfessionals(),

@@ -222,6 +222,39 @@ export function describeSchedulingProviderContract(
       );
     });
 
+    it("confirma presença sem liberar o horário e não confirma cancelado", async () => {
+      const created = await f.provider.createAppointment({
+        serviceId: f.services.corte,
+        professionalId: f.professionals.carlos,
+        startsAt: at("2026-10-01", "16:00"),
+        customer: f.customer,
+        source: "agent",
+      });
+      const confirmed = await f.provider.confirmAppointment(created.id);
+      expect(confirmed.status).toBe("confirmed");
+      expect((await f.provider.getAppointment(created.id))?.status).toBe("confirmed");
+      // Confirmar de novo não é erro.
+      expect((await f.provider.confirmAppointment(created.id)).status).toBe("confirmed");
+
+      const slots = await f.provider.getAvailability({
+        serviceId: f.services.corte,
+        professionalId: f.professionals.carlos,
+        ...thursday,
+      });
+      expect(slots.map((slot) => hhmm(slot.startsAt))).not.toContain("16:00");
+
+      // Remarcar volta a pedir confirmação.
+      const moved = await f.provider.rescheduleAppointment(created.id, {
+        startsAt: at("2026-10-02", "16:00"),
+      });
+      expect(moved.status).toBe("scheduled");
+
+      await f.provider.cancelAppointment(created.id);
+      await expect(f.provider.confirmAppointment(created.id)).rejects.toBeInstanceOf(
+        NotAllowedError,
+      );
+    });
+
     it("busca os próximos agendamentos do cliente por ID e por telefone", async () => {
       const first = await f.provider.createAppointment({
         serviceId: f.services.corte,

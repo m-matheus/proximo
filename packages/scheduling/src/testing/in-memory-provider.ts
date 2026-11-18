@@ -147,6 +147,12 @@ export class InMemorySchedulingProvider implements SchedulingProvider {
     return { ...current };
   }
 
+  async confirmAppointment(appointmentId: string): Promise<Appointment> {
+    const current = this.changeable(appointmentId);
+    current.status = "confirmed";
+    return { ...current };
+  }
+
   async getAppointment(appointmentId: string): Promise<Appointment | null> {
     const found = this.appointments.find((item) => item.id === appointmentId);
     return found ? { ...found } : null;

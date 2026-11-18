@@ -25,6 +25,7 @@
     "db:deploy": "pnpm --filter @proximo/db migrate:deploy",
     "db:seed": "pnpm --filter @proximo/db seed",
     "db:studio": "pnpm --filter @proximo/db studio",
+    "whatsapp:templates": "pnpm --filter @proximo/messaging templates",
     "tunnel": "ngrok http 3001 --config=ngrok.local.yml --traffic-policy-file=ngrok-policy.yml"
   },
   "devDependencies": {

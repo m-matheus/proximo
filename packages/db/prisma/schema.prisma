@@ -545,20 +545,24 @@ model AgentRun {
 
 /// Lembretes e confirmações enviados. A chave única impede envio duplicado.
 model Notification {
-  id             String             @id @default(uuid(7)) @db.Uuid
-  businessId     String             @map("business_id") @db.Uuid
+  id                  String             @id @default(uuid(7)) @db.Uuid
+  businessId          String             @map("business_id") @db.Uuid
   /// ID do agendamento no provider, interno ou externo.
-  appointmentRef String             @map("appointment_ref")
-  kind           NotificationKind
-  status         NotificationStatus @default(pending)
-  messageId      String?            @map("message_id") @db.Uuid
-  error          String?
-  sentAt         DateTime?          @map("sent_at") @db.Timestamptz(3)
-  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
+  appointmentRef      String             @map("appointment_ref")
+  /// Horário do agendamento quando o lembrete foi gerado. Remarcado, ganha lembretes novos.
+  appointmentStartsAt DateTime           @map("appointment_starts_at") @db.Timestamptz(3)
+  kind                NotificationKind
+  status              NotificationStatus @default(pending)
+  messageId           String?            @map("message_id") @db.Uuid
+  /// Motivo da falha ou de o lembrete não ter saído.
+  error               String?
+  sentAt              DateTime?          @map("sent_at") @db.Timestamptz(3)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(3)
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
-  @@unique([businessId, appointmentRef, kind])
+  @@unique([businessId, appointmentRef, kind, appointmentStartsAt])
+  @@index([status, createdAt])
   @@map("notifications")
 }
 

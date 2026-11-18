@@ -1,5 +1,5 @@
 import { createDb } from "@proximo/db";
-import { createQueues, createRedis, enqueueInbound } from "@proximo/queue";
+import { createQueues, createRedis, enqueueInbound, enqueueReminder } from "@proximo/queue";
 import { buildApp } from "./app";
 import { loadApiEnv } from "./env";
 
@@ -12,6 +12,7 @@ const app = await buildApp({
   db,
   env,
   enqueueInbound: (job) => enqueueInbound(queues.inbound, job, env.AGENT_DEBOUNCE_MS),
+  enqueueReminder: (job) => enqueueReminder(queues.reminders, job),
   logger: {
     level: env.LOG_LEVEL,
     // Nunca registrar tokens nem assinaturas.

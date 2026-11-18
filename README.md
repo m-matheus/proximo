@@ -8,6 +8,7 @@ Estado atual: etapa 2 do roadmap concluída. Veja [docs/architecture.md](docs/ar
 
 - Fluxo mínimo de ponta a ponta: mensagem chega, o agente entende, consulta horários, agenda e responde.
 - Remarcação, cancelamento e passagem para a equipe.
+- Lembretes de 24h e 2h por template, com botões de confirmar, remarcar e cancelar.
 - Simulador de conversa no navegador, que usa o mesmo caminho das mensagens do WhatsApp.
 
 ## Pré-requisitos
@@ -60,6 +61,11 @@ um instante para juntar mensagens picadas antes de chamar o agente.
 
 A lateral mostra os agendamentos do cliente simulado. "Recomeçar do zero" apaga o cliente e os
 agendamentos dele.
+
+Cada agendamento ativo na lateral tem os botões "Lembrete de 24h" e "Lembrete de 2h". Eles mandam
+o lembrete na hora, sem esperar a janela, e a conversa mostra os botões do template para tocar.
+Confirmar e cancelar respondem sem chamar o Claude; remarcar segue para o agente. Como o envio
+ignora a janela, o texto do lembrete diz "amanhã" ou "hoje" mesmo que o horário seja outro dia.
 
 Sem `ANTHROPIC_API_KEY`, o agente não roda. O cliente recebe um aviso de falha técnica e a
 conversa passa para a equipe. É o comportamento esperado quando a API do Claude falha.
@@ -141,6 +147,21 @@ entrar na Cloud API. Se for um chip pré-pago, mantenha a recarga em dia para n�
    número próprio, o painel registrou o número na Cloud API e inscreveu o app sozinho.
 7. Mande uma mensagem do celular para o número.
 
+### Templates
+
+Os lembretes saem por templates aprovados pela Meta, definidos em
+`packages/messaging/src/templates.ts`. Cada conta do WhatsApp precisa ter todos eles:
+
+```bash
+pnpm whatsapp:templates            # status de cada template na conta de WHATSAPP_DEMO_*
+pnpm whatsapp:templates --print    # o que --create enviaria, sem chamar a Meta
+pnpm whatsapp:templates --create   # envia para análise os que faltam
+```
+
+A análise da Meta pode levar de minutos a um dia. Enquanto o template não estiver
+`APPROVED`, o envio do lembrete falha e a notificação registra o erro. O texto do arquivo precisa
+ser igual ao aprovado: para mudar o texto, crie o template com outro nome.
+
 ### Túnel
 
 `pnpm tunnel` expõe a API pelo ngrok, no domínio fixo da conta. O domínio não muda entre
@@ -172,6 +193,7 @@ tempo. Use uma conta só para o Próximo.
 | `pnpm db:seed` | Cria a barbearia de exemplo |
 | `pnpm db:studio` | Abre o Prisma Studio |
 | `pnpm keygen` | Gera uma ENCRYPTION_KEY |
+| `pnpm whatsapp:templates` | Confere e cria os templates do WhatsApp (veja [Templates](#templates)) |
 | `pnpm tunnel` | Abre o túnel do ngrok para o webhook do WhatsApp |
 
 Os testes de integração usam o banco `proximo_test`, criado pelo docker-compose, e o Redis local.

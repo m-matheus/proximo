@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { seedDemoBusiness } from "@proximo/db";
 import { createTestDb, resetTestDatabase } from "@proximo/db/testing";
-import type { InboundJob } from "@proximo/queue";
+import type { InboundJob, ReminderJob } from "@proximo/queue";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app";
@@ -12,6 +12,7 @@ const APP_SECRET = "segredo-do-app";
 
 let app: FastifyInstance;
 let jobs: InboundJob[];
+let reminderJobs: ReminderJob[];
 
 function sign(body: string): string {
   return `sha256=${createHmac("sha256", APP_SECRET).update(body).digest("hex")}`;
@@ -76,6 +77,7 @@ beforeEach(async () => {
     },
   });
   jobs = [];
+  reminderJobs = [];
   app = await buildApp({
     db,
     env: {
@@ -86,6 +88,9 @@ beforeEach(async () => {
     },
     enqueueInbound: async (job) => {
       jobs.push(job);
+    },
+    enqueueReminder: async (job) => {
+      reminderJobs.push(job);
     },
   });
 });
@@ -192,6 +197,49 @@ describe("status e ecos", () => {
     ).toBe("read");
   });
 
+  it("falha na entrega de um lembrete marca a notificação como falha", async () => {
+    await post(textMessage("wamid.1", "oi"));
+    const inbound = await db.message.findFirstOrThrow();
+    const reminder = await db.message.create({
+      data: {
+        businessId: inbound.businessId,
+        conversationId: inbound.conversationId,
+        direction: "outbound",
+        author: "system",
+        kind: "template",
+        body: "Olá! Seu horário...",
+        externalId: "wamid.tpl",
+        deliveryStatus: "sent",
+      },
+    });
+    const notification = await db.notification.create({
+      data: {
+        businessId: inbound.businessId,
+        appointmentRef: "appt-1",
+        appointmentStartsAt: new Date(),
+        kind: "reminder_2h",
+        status: "sent",
+        messageId: reminder.id,
+      },
+    });
+    await post(
+      envelope("messages", {
+        statuses: [
+          {
+            id: "wamid.tpl",
+            status: "failed",
+            timestamp: "1790000001",
+            recipient_id: "555199998888",
+            errors: [{ code: 131026, title: "Message undeliverable" }],
+          },
+        ],
+      }),
+    );
+    expect(
+      await db.notification.findUniqueOrThrow({ where: { id: notification.id } }),
+    ).toMatchObject({ status: "failed", error: "131026 Message undeliverable" });
+  });
+
   it("resposta da equipe pelo celular tira o agente da conversa", async () => {
     await post(textMessage("wamid.1", "oi"));
     await post(
@@ -248,5 +296,108 @@ describe("simulador", () => {
     });
     expect(removed.statusCode).toBe(204);
     expect(await db.customer.count()).toBe(0);
+  });
+
+  it("manda lembrete na hora, mostra os botões e grava o toque como botão", async () => {
+    const channels = await app.inject({ method: "GET", url: "/dev/simulator/channels" });
+    const [channel] = channels.json() as Array<{ channelId: string }>;
+    const send = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: "/dev/simulator/messages",
+        payload: { channelId: channel?.channelId, phone: "(51) 99999-8888", ...payload },
+      });
+    const { conversationId } = (await send({ text: "oi" })).json() as { conversationId: string };
+    const conversation = await db.conversation.findUniqueOrThrow({ where: { id: conversationId } });
+    const [professional, service] = await Promise.all([
+      db.professional.findFirstOrThrow({ where: { name: "Carlos" } }),
+      db.service.findFirstOrThrow({ where: { name: "Corte" } }),
+    ]);
+    const appointment = await db.appointment.create({
+      data: {
+        businessId: conversation.businessId,
+        customerId: conversation.customerId,
+        professionalId: professional.id,
+        serviceId: service.id,
+        startsAt: new Date("2026-10-01T18:00:00.000Z"),
+        endsAt: new Date("2026-10-01T18:30:00.000Z"),
+        source: "agent",
+        priceCents: 5000,
+      },
+    });
+
+    const remind = () =>
+      app.inject({
+        method: "POST",
+        url: `/dev/simulator/appointments/${appointment.id}/reminders`,
+        payload: { kind: "reminder_24h" },
+      });
+    expect((await remind()).statusCode).toBe(202);
+    expect(reminderJobs).toEqual([
+      {
+        type: "send",
+        businessId: conversation.businessId,
+        appointmentId: appointment.id,
+        kind: "reminder_24h",
+      },
+    ]);
+
+    // O worker grava o lembrete; daí em diante o mesmo pedido é recusado.
+    const notification = await db.notification.create({
+      data: {
+        businessId: conversation.businessId,
+        appointmentRef: appointment.id,
+        appointmentStartsAt: appointment.startsAt,
+        kind: "reminder_24h",
+      },
+    });
+    expect((await remind()).statusCode).toBe(409);
+    await db.message.create({
+      data: {
+        businessId: conversation.businessId,
+        conversationId,
+        direction: "outbound",
+        author: "system",
+        kind: "template",
+        body: "Olá! Passando para lembrar...",
+        deliveryStatus: "sent",
+        payload: {
+          template: {
+            name: "lembrete_24h",
+            languageCode: "pt_BR",
+            quickReplyPayloads: [`rem:${notification.id}:confirm`, `rem:${notification.id}:cancel`],
+          },
+          buttons: ["Confirmar presença", "Cancelar horário"],
+        },
+      },
+    });
+    const shown = await app.inject({
+      method: "GET",
+      url: `/dev/simulator/conversations/${conversationId}`,
+    });
+    expect(shown.json()).toMatchObject({
+      messages: [
+        { kind: "text", buttons: [] },
+        {
+          kind: "template",
+          buttons: [
+            { label: "Confirmar presença", payload: `rem:${notification.id}:confirm` },
+            { label: "Cancelar horário", payload: `rem:${notification.id}:cancel` },
+          ],
+        },
+      ],
+    });
+
+    const tapped = await send({
+      text: "Confirmar presença",
+      buttonPayload: `rem:${notification.id}:confirm`,
+    });
+    expect(tapped.statusCode).toBe(200);
+    const button = await db.message.findFirstOrThrow({ where: { kind: "button" } });
+    expect(button).toMatchObject({
+      body: "Confirmar presença",
+      payload: { buttonPayload: `rem:${notification.id}:confirm` },
+    });
+    expect(jobs).toHaveLength(2);
   });
 });

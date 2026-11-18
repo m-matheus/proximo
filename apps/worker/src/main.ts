@@ -10,13 +10,28 @@ import {
   type OutboundJob,
   outboundJobSchema,
   QUEUE_NAMES,
+  type ReminderJob,
+  reminderJobSchema,
+  scheduleReminderScan,
 } from "@proximo/queue";
 import { DelayedError, UnrecoverableError, Worker } from "bullmq";
 import { pino } from "pino";
 import { ChannelRegistry } from "./channels";
 import { loadWorkerEnv } from "./env";
-import { ConversationBusyError, giveUpInbound, handleInbound, type WorkerDeps } from "./inbound";
+import {
+  ConversationBusyError,
+  giveUpInbound,
+  handleInbound,
+  schedulingProviderFor,
+  type WorkerDeps,
+} from "./inbound";
 import { handleOutbound } from "./outbound";
+import {
+  REMINDER_SCAN_EVERY_MS,
+  type ReminderDeps,
+  scanReminders,
+  sendReminderNow,
+} from "./reminders";
 
 const env = loadWorkerEnv();
 const logger = pino({
@@ -95,6 +110,32 @@ const outboundWorker = new Worker<OutboundJob>(
   { connection: createRedis(env.REDIS_URL), concurrency: env.WORKER_CONCURRENCY * 2 },
 );
 
+const reminderDeps: ReminderDeps = {
+  db,
+  enqueueOutbound: deps.enqueueOutbound,
+  providerFor: (business) => schedulingProviderFor(deps, business),
+  now: deps.now,
+  logger,
+};
+
+const remindersWorker = new Worker<ReminderJob>(
+  QUEUE_NAMES.reminders,
+  async (job) => {
+    const data = reminderJobSchema.parse(job.data);
+    if (data.type === "scan") {
+      const result = await scanReminders(reminderDeps);
+      if (result.queued || result.skipped || result.requeued || result.failedBusinesses) {
+        logger.info(result, "varredura de lembretes");
+      }
+      return result;
+    }
+    const outcome = await sendReminderNow(reminderDeps, data);
+    logger.info({ businessId: data.businessId, kind: data.kind, outcome }, "lembrete avulso");
+    return outcome;
+  },
+  { connection: createRedis(env.REDIS_URL), concurrency: 1 },
+);
+
 inboundWorker.on("failed", (job, error) => {
   logger.error(
     { jobId: job?.id, attempts: job?.attemptsMade, error: error.message },
@@ -116,12 +157,17 @@ outboundWorker.on("failed", (job, error) => {
     "falha ao enviar mensagem",
   );
 });
+remindersWorker.on("failed", (job, error) => {
+  logger.error({ jobId: job?.id, error: error.message }, "falha nos lembretes");
+});
+
+await scheduleReminderScan(queues.reminders, REMINDER_SCAN_EVERY_MS);
 
 logger.info({ model: env.ANTHROPIC_MODEL, effort: env.ANTHROPIC_EFFORT }, "worker no ar");
 
 async function shutdown(signal: string): Promise<void> {
   logger.info({ signal }, "encerrando o worker");
-  await Promise.all([inboundWorker.close(), outboundWorker.close()]);
+  await Promise.all([inboundWorker.close(), outboundWorker.close(), remindersWorker.close()]);
   await queues.close();
   await redis.quit();
   await db.$disconnect();

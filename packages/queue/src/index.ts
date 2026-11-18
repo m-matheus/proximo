@@ -13,6 +13,8 @@ export const QUEUE_NAMES = {
   inbound: "inbound-messages",
   /** Mensagens prontas para enviar pelo canal. */
   outbound: "outbound-messages",
+  /** Varredura periódica dos lembretes e envios avulsos pelo simulador. */
+  reminders: "reminders",
 } as const;
 
 export const inboundJobSchema = z.object({
@@ -29,6 +31,22 @@ export const outboundJobSchema = z.object({
 });
 export type OutboundJob = z.infer<typeof outboundJobSchema>;
 
+export const REMINDER_KINDS = ["reminder_24h", "reminder_2h"] as const;
+export type ReminderKind = (typeof REMINDER_KINDS)[number];
+
+export const reminderJobSchema = z.discriminatedUnion("type", [
+  /** Procura os horários que chegaram na hora do lembrete, em todos os negócios. */
+  z.object({ type: z.literal("scan") }),
+  /** Manda um lembrete agora, fora da janela. Usado pelo simulador. */
+  z.object({
+    type: z.literal("send"),
+    businessId: z.string(),
+    appointmentId: z.string(),
+    kind: z.enum(REMINDER_KINDS),
+  }),
+]);
+export type ReminderJob = z.infer<typeof reminderJobSchema>;
+
 /** Conexão Redis no formato que o BullMQ exige para workers. */
 export function createRedis(url: string, options: RedisOptions = {}): Redis {
   return new Redis(url, { maxRetriesPerRequest: null, ...options });
@@ -37,17 +55,20 @@ export function createRedis(url: string, options: RedisOptions = {}): Redis {
 export interface Queues {
   inbound: Queue<InboundJob>;
   outbound: Queue<OutboundJob>;
+  reminders: Queue<ReminderJob>;
   close(): Promise<void>;
 }
 
 export function createQueues(connection: Redis): Queues {
   const inbound = new Queue<InboundJob>(QUEUE_NAMES.inbound, { connection });
   const outbound = new Queue<OutboundJob>(QUEUE_NAMES.outbound, { connection });
+  const reminders = new Queue<ReminderJob>(QUEUE_NAMES.reminders, { connection });
   return {
     inbound,
     outbound,
+    reminders,
     async close() {
-      await Promise.all([inbound.close(), outbound.close()]);
+      await Promise.all([inbound.close(), outbound.close(), reminders.close()]);
     },
   };
 }
@@ -80,6 +101,38 @@ export async function enqueueOutbound(queue: Queue<OutboundJob>, job: OutboundJo
     jobId: `outbound-${job.messageId}`,
     attempts: 8,
     backoff: { type: "exponential", delay: 5_000 },
+    removeOnComplete: KEEP_COMPLETED,
+    removeOnFail: KEEP_FAILED,
+  });
+}
+
+/**
+ * Liga a varredura periódica dos lembretes. Chamar de novo só atualiza o intervalo:
+ * o BullMQ guarda um único agendador com este ID, mesmo com vários workers.
+ */
+export async function scheduleReminderScan(
+  queue: Queue<ReminderJob>,
+  everyMs: number,
+): Promise<void> {
+  await queue.upsertJobScheduler(
+    "reminder-scan",
+    { every: everyMs },
+    {
+      name: "scan",
+      data: { type: "scan" },
+      opts: { removeOnComplete: KEEP_COMPLETED, removeOnFail: KEEP_FAILED },
+    },
+  );
+}
+
+/** Pede um lembrete avulso. A tabela de notificações impede o envio duplicado. */
+export async function enqueueReminder(
+  queue: Queue<ReminderJob>,
+  job: Extract<ReminderJob, { type: "send" }>,
+): Promise<void> {
+  await queue.add("send", job, {
+    attempts: 3,
+    backoff: { type: "exponential", delay: 2_000 },
     removeOnComplete: KEEP_COMPLETED,
     removeOnFail: KEEP_FAILED,
   });

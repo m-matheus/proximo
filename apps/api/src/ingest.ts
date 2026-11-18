@@ -173,20 +173,22 @@ export async function recordStatus(db: Db, channel: ChannelRef, event: StatusEve
   if (event.status !== "failed" && STATUS_ORDER[event.status] <= current) {
     return;
   }
+  const error =
+    event.status === "failed"
+      ? event.errors.map((item) => [item.code, item.title].filter(Boolean).join(" ")).join("; ") ||
+        "Falha na entrega."
+      : null;
   await db.message.update({
     where: { id: message.id },
-    data: {
-      deliveryStatus: event.status,
-      ...(event.status === "failed"
-        ? {
-            error:
-              event.errors
-                .map((item) => [item.code, item.title].filter(Boolean).join(" "))
-                .join("; ") || null,
-          }
-        : {}),
-    },
+    data: { deliveryStatus: event.status, ...(error ? { error } : {}) },
   });
+  if (error) {
+    // Um lembrete aceito pela Meta ainda pode não ser entregue, como em número inexistente.
+    await db.notification.updateMany({
+      where: { businessId: channel.businessId, messageId: message.id },
+      data: { status: "failed", error },
+    });
+  }
 }
 
 /**

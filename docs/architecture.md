@@ -59,6 +59,27 @@ packages/
 
 O simulador entra no passo 2, pelo mesmo serviço de entrada, com um canal do tipo `simulator`.
 
+## Lembretes
+
+1. A cada 5 minutos, o worker varre os negócios ativos cuja agenda não manda lembrete própria
+   (`sendsOwnReminders`). Pelo `listAppointments` do provider, acha os horários marcados ou
+   confirmados que entraram na janela de um lembrete.
+2. O lembrete de 24h sai entre 24h e 23h antes do horário. O de 2h sai entre 2h e 1h30 antes.
+   Fora da janela, o lembrete não sai, para não chegar atrasado num horário marcado em cima da
+   hora. O de 2h vai também para quem já confirmou, porque é ele que evita o esquecimento.
+3. O lembrete não sai, e a notificação guarda o motivo, quando o cliente pediu para não receber,
+   foi anonimizado, não tem WhatsApp, o negócio não tem canal ativo ou o cliente falou com o
+   Próximo na última hora.
+4. A notificação é única por agendamento, tipo e horário. Dois workers não duplicam o lembrete, e
+   um horário remarcado ganha lembretes novos.
+5. O lembrete é um template aprovado pela Meta, em `@proximo/messaging`, enviado pela fila de
+   saída. A notificação acompanha o status da mensagem, inclusive a falha de entrega avisada pelo
+   webhook.
+6. Os botões trazem `rem:<notificação>:<ação>`. O worker resolve o toque antes do agente:
+   confirmar e cancelar passam pelo provider e recebem resposta fixa; remarcar segue para o agente,
+   descrito com o horário. O botão só mexe em agendamento do próprio cliente e não confirma um
+   horário que mudou depois do lembrete.
+
 ## Contrato da agenda
 
 ```ts
@@ -72,6 +93,7 @@ interface SchedulingProvider {
   createAppointment(input: NewAppointment): Promise<Appointment>;
   rescheduleAppointment(id: string, change: { startsAt: Date; professionalId?: string }): Promise<Appointment>;
   cancelAppointment(id: string, reason?: string): Promise<Appointment>;
+  confirmAppointment(id: string): Promise<Appointment>;
   getAppointment(id: string): Promise<Appointment | null>;
   findCustomerAppointments(query: CustomerAppointmentsQuery): Promise<Appointment[]>;
   listAppointments(query: AppointmentsRangeQuery): Promise<Appointment[]>;
@@ -82,7 +104,7 @@ interface SchedulingProvider {
   pelo campo `schedulingProvider` do negócio.
 - O motor de disponibilidade é uma função pura, usada pelo provider interno e pelo provider em
   memória dos testes. O que é oferecido é exatamente o que a criação aceita.
-- A suíte de contrato roda os mesmos doze testes nos dois providers.
+- A suíte de contrato roda os mesmos treze testes nos dois providers.
 
 ## Modelo de dados
 
@@ -97,7 +119,7 @@ interface SchedulingProvider {
 | appointments | Agendamentos, com preço no momento da marcação |
 | conversations, messages | Chat com o cliente, modo agente ou equipe, estado do agente |
 | agent_sessions, agent_runs | Histórico exato enviado ao Claude e custo de cada turno |
-| notifications | Lembretes enviados, sem duplicidade |
+| notifications | Lembretes, um por agendamento, tipo e horário; guarda o motivo quando não saem |
 | audit_logs | Handoffs, exclusões de dados, mudanças de configuração |
 
 Garantias no banco:
@@ -189,8 +211,8 @@ estável e em cache.
 
 - **Chave do cliente.** A Meta passou a mandar o BSUID e pode omitir o telefone, então o contrato
   busca agendamentos por `findCustomerAppointments`, com ID ou telefone, e não só por telefone.
-- **Contrato da agenda.** Ganhou `getOpeningHours` e `getAppointment`, e a consulta de horários
-  aceita ignorar o próprio agendamento numa remarcação.
+- **Contrato da agenda.** Ganhou `getOpeningHours`, `getAppointment` e `confirmAppointment`, e a
+  consulta de horários aceita ignorar o próprio agendamento numa remarcação.
 - **Catálogo no prompt.** Serviços e profissionais vão no prompt de sistema, e não em ferramentas de
   listagem. Isso economiza uma ida e volta por conversa, e mudanças no catálogo abrem sessão nova.
 - **Login.** As tabelas de usuário e vínculo existem; as de sessão de login entram com o painel.

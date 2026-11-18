@@ -17,6 +17,8 @@ type ChatMessage = {
   body: string | null;
   deliveryStatus: string | null;
   createdAt: string;
+  /** Botões de resposta rápida de um template, como os do lembrete. */
+  buttons: Array<{ label: string; payload: string }>;
 };
 
 type Appointment = {
@@ -36,6 +38,13 @@ type Conversation = {
   messages: ChatMessage[];
   appointments: Appointment[];
 };
+
+const ACTIVE_STATUSES = new Set(["scheduled", "confirmed"]);
+
+const REMINDERS = [
+  { kind: "reminder_24h", label: "Lembrete de 24h" },
+  { kind: "reminder_2h", label: "Lembrete de 2h" },
+] as const;
 
 const STATUS_LABEL: Record<string, string> = {
   scheduled: "agendado",
@@ -137,29 +146,57 @@ export default function SimulatorPage() {
     return last?.direction === "inbound" && conversation?.mode === "agent";
   }, [conversation]);
 
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (!text.trim() || !channelId) {
-      return;
-    }
+  /** Manda uma mensagem do cliente: texto digitado ou toque num botão. */
+  async function post(message: string, buttonPayload?: string): Promise<boolean> {
     setSending(true);
     setError(null);
     try {
       const response = await fetch("/api/dev/simulator/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ channelId, phone, name: name || undefined, text }),
+        body: JSON.stringify({
+          channelId,
+          phone,
+          name: name || undefined,
+          text: message,
+          buttonPayload,
+        }),
       });
       const data = (await response.json()) as { conversationId?: string; error?: string };
       if (!response.ok || !data.conversationId) {
         throw new Error(data.error ?? "Falha ao enviar.");
       }
       setConversationId(data.conversationId);
-      setText("");
+      return true;
     } catch (sendError) {
       setError(sendError instanceof Error ? sendError.message : "Falha ao enviar.");
+      return false;
     } finally {
       setSending(false);
+    }
+  }
+
+  async function send(event: FormEvent) {
+    event.preventDefault();
+    if (!text.trim() || !channelId) {
+      return;
+    }
+    if (await post(text)) {
+      setText("");
+    }
+  }
+
+  /** Manda o lembrete agora, sem esperar a janela de 24h ou 2h. */
+  async function remind(appointmentId: string, kind: (typeof REMINDERS)[number]["kind"]) {
+    setError(null);
+    const response = await fetch(`/api/dev/simulator/appointments/${appointmentId}/reminders`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind }),
+    });
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { error?: string };
+      setError(data.error ?? "Falha ao pedir o lembrete.");
     }
   }
 
@@ -207,23 +244,42 @@ export default function SimulatorPage() {
             const mine = message.direction === "inbound";
             return (
               <div key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-                <div
-                  className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm shadow-sm ${
-                    mine
-                      ? "rounded-br-sm bg-brand-600 text-white"
-                      : "rounded-bl-sm bg-white text-stone-900"
-                  }`}
-                >
-                  {message.author === "staff" && (
-                    <p className="mb-1 text-xs font-medium text-amber-700">Equipe</p>
-                  )}
-                  {message.body ? formatWhatsApp(message.body) : <em>[{message.kind}]</em>}
-                  <p
-                    className={`mt-1 text-right text-[11px] ${mine ? "text-brand-100" : "text-stone-400"}`}
+                <div className="max-w-[75%] space-y-1">
+                  <div
+                    className={`whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm shadow-sm ${
+                      mine
+                        ? "rounded-br-sm bg-brand-600 text-white"
+                        : "rounded-bl-sm bg-white text-stone-900"
+                    }`}
                   >
-                    {time(message.createdAt, timezone)}
-                    {!mine && message.deliveryStatus === "failed" ? " · falhou" : ""}
-                  </p>
+                    {message.author === "staff" && (
+                      <p className="mb-1 text-xs font-medium text-amber-700">Equipe</p>
+                    )}
+                    {message.kind === "template" && (
+                      <p className="mb-1 text-xs font-medium text-brand-700">Lembrete</p>
+                    )}
+                    {message.kind === "button" && (
+                      <p className="mb-1 text-xs text-brand-100">Tocou no botão</p>
+                    )}
+                    {message.body ? formatWhatsApp(message.body) : <em>[{message.kind}]</em>}
+                    <p
+                      className={`mt-1 text-right text-[11px] ${mine ? "text-brand-100" : "text-stone-400"}`}
+                    >
+                      {time(message.createdAt, timezone)}
+                      {!mine && message.deliveryStatus === "failed" ? " · falhou" : ""}
+                    </p>
+                  </div>
+                  {message.buttons.map((button) => (
+                    <button
+                      key={button.payload}
+                      type="button"
+                      disabled={sending}
+                      onClick={() => void post(button.label, button.payload)}
+                      className="block w-full rounded-xl bg-white px-3 py-2 text-center text-sm font-medium text-brand-700 shadow-sm hover:bg-stone-50 disabled:opacity-50"
+                    >
+                      {button.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             );
@@ -293,7 +349,8 @@ export default function SimulatorPage() {
             Recomeçar do zero
           </button>
           <p className="text-xs text-stone-500">
-            Recomeçar apaga este cliente e os agendamentos dele.
+            Recomeçar apaga este cliente e os agendamentos dele. Os botões de lembrete em cada
+            agendamento mandam o lembrete na hora, sem esperar a janela de 24h ou 2h.
           </p>
         </div>
 
@@ -310,6 +367,20 @@ export default function SimulatorPage() {
                     {dateTime(appointment.startsAt, timezone)} ·{" "}
                     {STATUS_LABEL[appointment.status] ?? appointment.status}
                   </p>
+                  {ACTIVE_STATUSES.has(appointment.status) && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {REMINDERS.map((reminder) => (
+                        <button
+                          key={reminder.kind}
+                          type="button"
+                          onClick={() => void remind(appointment.id, reminder.kind)}
+                          className="rounded-md border border-stone-300 bg-white px-2 py-1 text-xs hover:bg-stone-100"
+                        >
+                          {reminder.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

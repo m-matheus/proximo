@@ -219,6 +219,19 @@ export class InternalSchedulingProvider implements SchedulingProvider {
     return toAppointment(row);
   }
 
+  async confirmAppointment(appointmentId: string): Promise<Appointment> {
+    const current = await this.loadChangeableAppointment(appointmentId);
+    if (current.status === "confirmed") {
+      return toAppointment(current);
+    }
+    const row = await this.db.appointment.update({
+      where: { id: appointmentId },
+      data: { status: "confirmed" },
+      include: APPOINTMENT_INCLUDE,
+    });
+    return toAppointment(row);
+  }
+
   async getAppointment(appointmentId: string): Promise<Appointment | null> {
     const row = await this.db.appointment.findUnique({
       where: { id: appointmentId },

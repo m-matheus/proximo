@@ -43,6 +43,8 @@ export interface SchedulingProvider {
     change: { startsAt: Date; professionalId?: string },
   ): Promise<Appointment>;
   cancelAppointment(appointmentId: string, reason?: string): Promise<Appointment>;
+  /** Registra que o cliente confirmou presença. O horário continua ocupado. */
+  confirmAppointment(appointmentId: string): Promise<Appointment>;
   getAppointment(appointmentId: string): Promise<Appointment | null>;
   /** Agendamentos de um cliente, pelo ID interno ou pelo telefone. Por padrão, só os futuros. */
   findCustomerAppointments(query: CustomerAppointmentsQuery): Promise<Appointment[]>;
